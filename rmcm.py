@@ -2,29 +2,62 @@
 
 def remove_comments_and_docstrings(source):
 
-    def not_inlist(last_significant_token):
-
-        if last_significant_token in (',', '[', '(', '{'):
-            return False
-        return True
-
+    import ast
     import io
     import tokenize
+
+    def is_docstring_expression(node):
+        return (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        )
+
+    def character_column(line, byte_column):
+        """Convert an AST UTF-8 byte offset to a Python string column."""
+        return len(line.encode("utf-8")[:byte_column].decode("utf-8"))
+
+    def docstring_spans(tree, source_text):
+        spans = []
+        lines = source_text.splitlines(keepends=True)
+        for node in ast.walk(tree):
+            if not isinstance(
+                node,
+                (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef),
+            ):
+                continue
+            if node.body and is_docstring_expression(node.body[0]):
+                expression = node.body[0]
+                spans.append(
+                    (
+                        expression.lineno,
+                        character_column(
+                            lines[expression.lineno - 1], expression.col_offset
+                        ),
+                        expression.end_lineno,
+                        character_column(
+                            lines[expression.end_lineno - 1], expression.end_col_offset
+                        ),
+                    )
+                )
+        return spans
+
+    def token_in_docstring(token, spans):
+        start_line, start_col = token.start
+        end_line, end_col = token.end
+        for span_start_line, span_start_col, span_end_line, span_end_col in spans:
+            starts_after = (start_line, start_col) >= (span_start_line, span_start_col)
+            ends_before = (end_line, end_col) <= (span_end_line, span_end_col)
+            if starts_after and ends_before:
+                return True
+        return False
+
+    tree = ast.parse(source)
+    spans = docstring_spans(tree, source)
 
     io_obj = io.StringIO(source)
     out_tokens = []
 
-    IGNORED_TOKENS = (
-        tokenize.INDENT,
-        tokenize.DEDENT,
-        tokenize.NEWLINE,
-        tokenize.NL,
-        tokenize.COMMENT,
-        tokenize.ENCODING,
-    )
-    last_significant_token = ''
-
-    prev_toktype = tokenize.INDENT
     last_lineno = -1
     last_col = 0
 
@@ -37,24 +70,15 @@ def remove_comments_and_docstrings(source):
 
         if start_line > last_lineno:
             last_col = 0
-        if start_col > last_col:
+        skip = token_in_docstring(tok, spans)
+        if not skip and start_col > last_col:
             out_tokens.append(" " * (start_col - last_col))
 
-        if token_type == tokenize.COMMENT:
+        if skip or token_type == tokenize.COMMENT:
             pass
-        elif token_type == tokenize.STRING and prev_toktype in (tokenize.INDENT, tokenize.NEWLINE, tokenize.NL):
-            stripped_line = line.strip()
-            if stripped_line.startswith(("'''", '"""')) and stripped_line.endswith(("'''", '"""')) and not_inlist(last_significant_token):
-                out_tokens.append("")
-            else:
-                out_tokens.append(token_string)
         else:
             out_tokens.append(token_string)
 
-        if token_type not in IGNORED_TOKENS:
-            last_significant_token = token_string
-
-        prev_toktype = token_type
         last_lineno = end_line
         last_col = end_col
 
@@ -73,7 +97,6 @@ def remove_comments_and_docstrings(source):
             result_lines.append(ln.rstrip())
 
     return "\n".join(result_lines).strip("\n") + "\n"
-
 
 def main():
     from tokenize import TokenError
