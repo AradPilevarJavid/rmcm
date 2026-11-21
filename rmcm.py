@@ -1,83 +1,134 @@
 #! /usr/bin/env python3
 
-def remove_comments_and_docstrings(source):
+import argparse
+import ast
+import io
+import os
+import re
+import sys
+import tempfile
+import tokenize
 
-    import ast
-    import io
-    import tokenize
+CODING_COOKIE = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*[-_.a-zA-Z0-9]+")
 
-    def is_docstring_expression(node):
-        return (
-            isinstance(node, ast.Expr)
-            and isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
+STRUCTURAL_TOKENS = {
+    tokenize.NEWLINE,
+    tokenize.NL,
+    tokenize.INDENT,
+    tokenize.DEDENT,
+    tokenize.ENDMARKER,
+}
+
+
+def is_docstring_expression(node):
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    )
+
+
+def character_column(line, byte_column):
+    """Convert an AST UTF-8 byte offset to a Python string column."""
+    return len(line.encode("utf-8")[:byte_column].decode("utf-8"))
+
+
+def docstring_spans(tree, source_text):
+    spans = []
+    lines = source_text.splitlines(keepends=True)
+    for node in ast.walk(tree):
+        if not isinstance(
+            node,
+            (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef),
+        ):
+            continue
+        if not node.body or not is_docstring_expression(node.body[0]):
+            continue
+        expression = node.body[0]
+        needs_pass = not isinstance(node, ast.Module) and len(node.body) == 1
+        spans.append(
+            (
+                expression.lineno,
+                character_column(
+                    lines[expression.lineno - 1], expression.col_offset
+                ),
+                expression.end_lineno,
+                character_column(
+                    lines[expression.end_lineno - 1], expression.end_col_offset
+                ),
+                needs_pass,
+            )
         )
+    return spans
 
-    def character_column(line, byte_column):
-        """Convert an AST UTF-8 byte offset to a Python string column."""
-        return len(line.encode("utf-8")[:byte_column].decode("utf-8"))
 
-    def docstring_spans(tree, source_text):
-        spans = []
-        lines = source_text.splitlines(keepends=True)
-        for node in ast.walk(tree):
-            if not isinstance(
-                node,
-                (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef),
-            ):
-                continue
-            if node.body and is_docstring_expression(node.body[0]):
-                expression = node.body[0]
-                spans.append(
-                    (
-                        expression.lineno,
-                        character_column(
-                            lines[expression.lineno - 1], expression.col_offset
-                        ),
-                        expression.end_lineno,
-                        character_column(
-                            lines[expression.end_lineno - 1], expression.end_col_offset
-                        ),
-                    )
-                )
-        return spans
+def find_span(token, spans):
+    start_line, start_col = token.start
+    end_line, end_col = token.end
+    for span in spans:
+        starts_after = (start_line, start_col) >= (span[0], span[1])
+        ends_before = (end_line, end_col) <= (span[2], span[3])
+        if starts_after and ends_before:
+            return span
+    return None
 
-    def token_in_docstring(token, spans):
-        start_line, start_col = token.start
-        end_line, end_col = token.end
-        for span_start_line, span_start_col, span_end_line, span_end_col in spans:
-            starts_after = (start_line, start_col) >= (span_start_line, span_start_col)
-            ends_before = (end_line, end_col) <= (span_end_line, span_end_col)
-            if starts_after and ends_before:
-                return True
+
+def is_protected_comment(token, source_lines):
+    if token.type != tokenize.COMMENT:
         return False
+    line_no = token.start[0]
+    if line_no == 1 and token.string.startswith("#!"):
+        return True
+    if line_no <= 2 and CODING_COOKIE.match(source_lines[line_no - 1]):
+        return True
+    return False
 
+
+def remove_comments_and_docstrings(source):
     tree = ast.parse(source)
     spans = docstring_spans(tree, source)
+    source_lines = source.splitlines(keepends=True)
 
     io_obj = io.StringIO(source)
     out_tokens = []
+    protected_lines = set()
 
     last_lineno = -1
     last_col = 0
+    line_index = 0
+    emitted_pass = set()
 
-    tokens = tokenize.generate_tokens(io_obj.readline)
-
-    for tok in tokens:
+    for tok in tokenize.generate_tokens(io_obj.readline):
         token_type, token_string, start, end, line = tok
         start_line, start_col = start
         end_line, end_col = end
 
         if start_line > last_lineno:
             last_col = 0
-        skip = token_in_docstring(tok, spans)
-        if not skip and start_col > last_col:
+
+        span = find_span(tok, spans)
+        needs_pass = span is not None and span[4] and span not in emitted_pass
+        emit = span is None or needs_pass
+
+        if emit and start_col > last_col:
             out_tokens.append(" " * (start_col - last_col))
 
-        if skip or token_type == tokenize.COMMENT:
+        if needs_pass:
+            out_tokens.append("pass")
+            emitted_pass.add(span)
+        elif span is not None:
             pass
+        elif token_type == tokenize.COMMENT:
+            if is_protected_comment(tok, source_lines):
+                out_tokens.append(token_string)
         else:
             out_tokens.append(token_string)
+
+        if token_type not in STRUCTURAL_TOKENS and "\n" in token_string:
+            protected_lines.update(
+                range(line_index, line_index + token_string.count("\n") + 1)
+            )
+        line_index += token_string.count("\n")
 
         last_lineno = end_line
         last_col = end_col
@@ -87,7 +138,11 @@ def remove_comments_and_docstrings(source):
     lines = cleaned.split("\n")
     result_lines = []
     blank_run = 0
-    for ln in lines:
+    for index, ln in enumerate(lines):
+        if index in protected_lines:
+            result_lines.append(ln)
+            blank_run = 0
+            continue
         if ln.strip() == "":
             blank_run += 1
             if blank_run <= 1:
@@ -98,43 +153,75 @@ def remove_comments_and_docstrings(source):
 
     return "\n".join(result_lines).strip("\n") + "\n"
 
-def main():
-    from tokenize import TokenError
-    from sys import stderr
-    import argparse
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-i', '--input', help='path to input file', required=True)
+def read_source(path):
+    if path == "-":
+        return sys.stdin.read(), "utf-8"
+    with tokenize.open(path) as f:
+        return f.read(), f.encoding
+
+
+def write_atomic(path, text, encoding):
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".rmcm-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding=encoding, newline="") as f:
+            f.write(text)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="rmcm",
+        description="Remove comments and docstrings from Python files.",
+    )
+    parser.add_argument(
+        "-i", "--input", help="path to input file ('-' for stdin)", required=True
+    )
     action = parser.add_mutually_exclusive_group()
-    action.add_argument('-o', '--output', help='path to output file')
-    action.add_argument('-O', '--overwrite', action='store_true', help='overwrite input file')
-    parser.add_argument('-p', '--print', action='store_true', help='print output to stdout')
-    args = parser.parse_args()
+    action.add_argument("-o", "--output", help="path to output file")
+    action.add_argument(
+        "-O", "--overwrite", action="store_true", help="overwrite input file"
+    )
+    parser.add_argument(
+        "-p", "--print", action="store_true", help="print output to stdout"
+    )
+    args = parser.parse_args(argv)
 
     if not args.print and not args.overwrite and args.output is None:
-        print("Select output format with -p, -O or -o {filepath}")
-        exit(1)
+        parser.error("select an output with -p, -O or -o {filepath}")
 
-    input_path = args.input
+    if args.overwrite and args.input == "-":
+        parser.error("cannot overwrite stdin")
+
     output_path = args.input if args.overwrite else args.output
 
-    with open(input_path, "r", encoding="utf-8") as f:
-        source = f.read()
-
     try:
+        source, encoding = read_source(args.input)
         cleaned = remove_comments_and_docstrings(source)
-    except TokenError as e:
-        print(f"Failed to tokenize {input_path}: {e}", file=stderr)
-        exit(1)
+    except (SyntaxError, tokenize.TokenError, UnicodeDecodeError) as e:
+        print(f"rmcm: failed to process {args.input}: {e}", file=sys.stderr)
+        return 1
 
     if output_path is not None:
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(cleaned)
+        try:
+            write_atomic(output_path, cleaned, encoding)
+        except OSError as e:
+            print(f"rmcm: failed to write {output_path}: {e}", file=sys.stderr)
+            return 1
         print(f"Wrote cleaned file to {output_path}")
 
     if args.print:
-        print(cleaned)
+        sys.stdout.write(cleaned)
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

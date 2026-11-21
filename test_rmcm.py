@@ -1,6 +1,11 @@
+import contextlib
+import io
+import os
+import tempfile
 import unittest
+import unittest.mock
 
-from rmcm import remove_comments_and_docstrings
+from rmcm import main, remove_comments_and_docstrings
 
 
 class DocstringRemovalTests(unittest.TestCase):
@@ -50,6 +55,69 @@ def function():
             remove_comments_and_docstrings(source),
             "def function():\n\n    return 1\n",
         )
+
+    def test_preserves_multiline_string_contents(self):
+        source = 'x = """a\n\n\nb   \nc"""\n'
+        self.assertEqual(remove_comments_and_docstrings(source), source)
+
+    def test_inserts_pass_for_docstring_only_bodies(self):
+        source = (
+            'def f():\n    """doc"""\n\n'
+            'class C:\n    """doc"""\n\n'
+            'async def g():\n    """doc"""\n'
+        )
+        cleaned = remove_comments_and_docstrings(source)
+        compile(cleaned, "<test>", "exec")
+        self.assertNotIn("doc", cleaned)
+        self.assertEqual(cleaned.count("pass"), 3)
+
+    def test_inserts_pass_for_parenthesized_docstring_only_body(self):
+        source = 'def f():\n    (\n        """doc"""\n    )\n'
+        self.assertEqual(
+            remove_comments_and_docstrings(source),
+            "def f():\n    pass\n",
+        )
+
+    def test_preserves_shebang_and_encoding_cookie(self):
+        source = (
+            "#!/usr/bin/env python3\n"
+            "# -*- coding: utf-8 -*-\n"
+            "# gone\n"
+            "print(1)\n"
+        )
+        self.assertEqual(
+            remove_comments_and_docstrings(source),
+            "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n\nprint(1)\n",
+        )
+
+    def test_raises_on_invalid_syntax(self):
+        with self.assertRaises(SyntaxError):
+            remove_comments_and_docstrings("def (:\n")
+
+
+class CliTests(unittest.TestCase):
+    def test_print_has_no_extra_blank_line(self):
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".py", delete=False, encoding="utf-8"
+        ) as f:
+            f.write("# c\nx = 1\n")
+            path = f.name
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = main(["-i", path, "-p"])
+        finally:
+            os.unlink(path)
+        self.assertEqual(code, 0)
+        self.assertEqual(buf.getvalue(), "x = 1\n")
+
+    def test_reads_from_stdin(self):
+        buf = io.StringIO()
+        with unittest.mock.patch("sys.stdin", io.StringIO("# c\nx = 1\n")):
+            with contextlib.redirect_stdout(buf):
+                code = main(["-i", "-", "-p"])
+        self.assertEqual(code, 0)
+        self.assertEqual(buf.getvalue(), "x = 1\n")
 
 
 if __name__ == "__main__":
