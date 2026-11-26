@@ -163,6 +163,78 @@ def remove_comments_and_docstrings(source):
     return "\n".join(result_lines).strip("\n") + "\n"
 
 
+def remove_slash_comments(source, line_comments=True):
+    """Remove C/CSS comments without interpreting comment markers in strings."""
+    result = []
+    i = 0
+    state = "code"
+    quote = None
+    while i < len(source):
+        char = source[i]
+        nxt = source[i + 1] if i + 1 < len(source) else ""
+        if state == "line_comment":
+            if char in "\r\n":
+                result.append(char)
+                state = "code"
+            else:
+                result.append(" " if char != "\t" else "\t")
+            i += 1
+            continue
+        if state == "block_comment":
+            if char == "*" and nxt == "/":
+                result.extend((" ", " "))
+                i += 2
+                state = "code"
+            else:
+                if char in "\r\n":
+                    result.append(char)
+                else:
+                    result.append("\t" if char == "\t" else " ")
+                i += 1
+            continue
+        if state == "string":
+            result.append(char)
+            if char == "\\" and nxt:
+                result.append(nxt)
+                i += 2
+                continue
+            if char == quote:
+                state = "code"
+                quote = None
+            i += 1
+            continue
+        if char in ("'", '"'):
+            result.append(char)
+            quote = char
+            state = "string"
+            i += 1
+            continue
+        if char == "/" and nxt == "*":
+            result.extend((" ", " "))
+            i += 2
+            state = "block_comment"
+            continue
+        matched = line_comments and source.startswith("//", i)
+        if matched:
+            result.extend((" ", " "))
+            i += 2
+            state = "line_comment"
+            continue
+        result.append(char)
+        i += 1
+    return "".join(result)
+
+
+def clean_source(source, language):
+    if language == "python":
+        return remove_comments_and_docstrings(source)
+    if language == "c":
+        return remove_slash_comments(source)
+    if language == "css":
+        return remove_slash_comments(source, line_comments=False)
+    raise ValueError(f"unsupported language: {language}")
+
+
 def read_source(path):
     if path == "-":
         return sys.stdin.read(), "utf-8"
@@ -188,13 +260,42 @@ def write_atomic(path, text, encoding):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="rmcm",
-        description="Remove comments and docstrings from Python files.",
+        description="Remove comments from source files (Python is the default).",
     )
     parser.add_argument(
         "-i",
         "--input",
         help="path to input file ('-' for stdin)",
         required=True,
+    )
+    parser.add_argument(
+        "-l",
+        "--language",
+        "--lang",
+        choices=("python", "c", "css"),
+        default="python",
+        help="source language (default: python)",
+    )
+    parser.add_argument(
+        "--python",
+        dest="language",
+        action="store_const",
+        const="python",
+        help="select Python (the default)",
+    )
+    parser.add_argument(
+        "-c",
+        dest="language",
+        action="store_const",
+        const="c",
+        help="select C-style comments",
+    )
+    parser.add_argument(
+        "--css",
+        dest="language",
+        action="store_const",
+        const="css",
+        help="select CSS comments",
     )
     action = parser.add_mutually_exclusive_group()
     action.add_argument("-o", "--output", help="path to output file")
@@ -216,8 +317,8 @@ def main(argv=None):
 
     try:
         source, encoding = read_source(args.input)
-        cleaned = remove_comments_and_docstrings(source)
-    except (SyntaxError, tokenize.TokenError, UnicodeDecodeError) as e:
+        cleaned = clean_source(source, args.language)
+    except (SyntaxError, tokenize.TokenError, UnicodeDecodeError, ValueError) as e:
         print(f"rmcm: failed to process {args.input}: {e}", file=sys.stderr)
         return 1
 

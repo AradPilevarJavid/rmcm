@@ -5,7 +5,7 @@ import tempfile
 import unittest
 import unittest.mock
 
-from rmcm import main, remove_comments_and_docstrings
+from rmcm import clean_source, main, remove_comments_and_docstrings
 
 
 class DocstringRemovalTests(unittest.TestCase):
@@ -101,6 +101,23 @@ def function():
             remove_comments_and_docstrings("def (:\n")
 
 
+class OtherLanguageTests(unittest.TestCase):
+    def test_c_removes_both_comment_forms_and_preserves_string_markers(self):
+        source = 'char *url = "https://example.test/a/*b*/"; // line\nint x; /* block\ncomment */\n'
+        cleaned = clean_source(source, "c")
+        self.assertIn('"https://example.test/a/*b*/"', cleaned)
+        self.assertNotIn("line", cleaned)
+        self.assertNotIn("block", cleaned)
+        self.assertEqual(cleaned.count("\n"), source.count("\n"))
+
+    def test_css_removes_block_comments_and_preserves_string_markers(self):
+        source = 'a { content: "/* keep */"; /* remove */ color: red; }\n'
+        cleaned = clean_source(source, "css")
+        self.assertIn('"/* keep */"', cleaned)
+        self.assertNotIn("remove", cleaned)
+        self.assertIn("color: red", cleaned)
+
+
 class CliTests(unittest.TestCase):
     def test_print_has_no_extra_blank_line(self):
         with tempfile.NamedTemporaryFile(
@@ -134,6 +151,34 @@ class CliTests(unittest.TestCase):
         self.assertIn("--output OUTPUT", buf.getvalue())
         self.assertIn("--overwrite", buf.getvalue())
         self.assertIn("--print", buf.getvalue())
+        self.assertIn("--python", buf.getvalue())
+        self.assertIn("-c", buf.getvalue())
+        self.assertIn("--css", buf.getvalue())
+
+    def test_c_cli_selector_writes_cleaned_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = os.path.join(directory, "input.c")
+            output_path = os.path.join(directory, "output.c")
+            with open(source_path, "w", encoding="utf-8") as f:
+                f.write("int value = 1; // remove\n")
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = main(["-c", "-i", source_path, "-o", output_path])
+            self.assertEqual(code, 0)
+            with open(output_path, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "int value = 1;          \n")
+
+    def test_python_selector_and_implicit_default(self):
+        for selector in ([], ["--python"], ["--lang", "python"]):
+            with tempfile.TemporaryDirectory() as directory:
+                source_path = os.path.join(directory, "input.py")
+                output_path = os.path.join(directory, "output.py")
+                with open(source_path, "w", encoding="utf-8") as f:
+                    f.write("# remove\nx = 1\n")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    code = main(selector + ["-i", source_path, "-o", output_path])
+                self.assertEqual(code, 0)
+                with open(output_path, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "x = 1\n")
 
 
 if __name__ == "__main__":

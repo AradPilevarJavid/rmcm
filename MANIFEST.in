@@ -1,0 +1,4 @@
+include LICENSE
+include README.md
+include rmcm.py
+include test_rmcm.py

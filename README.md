@@ -1,104 +1,109 @@
 # rmcm
 
-`rmcm` removes Python comments and docstrings while preserving executable
-code. It uses Python's tokenizer and syntax tree, so comment-like text inside
-strings is kept. Files must contain valid Python syntax. Shebangs and encoding
-cookies are preserved, and empty function/class bodies receive `pass` after
-their docstrings are removed.
+`rmcm` removes comments from Python, C, and CSS source files. Python is the
+default and its docstrings are removed as well. The C and CSS scanners preserve
+quoted strings and newlines while replacing comments with whitespace, so code
+before and after a comment does not accidentally join together.
 
-## Requirements
+## Requirements and installation
 
-Python 3.8 or newer. The command has no third-party Python dependencies.
+Python 3.8 or newer is required. The program itself has no runtime
+dependencies.
 
-## Install
-
-### NixOS / Nix
-
-Add the flake as an input:
-
-```nix
-inputs.rmcm.url = "github:thecosmomancer/rmcm";
-```
-
-Then add `inputs.rmcm.packages.${system}.default` to
-`environment.systemPackages` (or to `home.packages` in Home Manager). To run
-without installing, use `nix run github:thecosmomancer/rmcm -- --help`.
-
-### Other systems
-
-Clone the repository and install the script on your PATH:
+Install from a cloned source tree for the current user:
 
 ```sh
 git clone https://github.com/thecosmomancer/rmcm.git
 cd rmcm
-python3 --version
-chmod +x rmcm.py
-sudo install -m 755 rmcm.py /usr/local/bin/rmcm
+python3 -m pip install --user .
 ```
 
-Alternatively, run it directly as `python3 rmcm.py ...`. The `setup.sh`
-script performs the same system-wide install and requires `sudo` access to
-`/usr/local/bin`.
+The `bash setup.sh` script runs the same install. Make sure Python's user
+`bin` directory is on your `PATH`. To install into an active virtual
+environment, run `python3 -m pip install .` instead. You can also run the
+source directly: `python3 rmcm.py --help`.
+
+The project includes `pyproject.toml`, so standard Python packaging tools can
+build and install a wheel or source archive. The license and README are included
+as project metadata. Nix users can add `inputs.rmcm.packages.${system}.default`
+to `environment.systemPackages` or Home Manager's `home.packages`; for a
+one-off invocation use:
+
+```sh
+nix run github:thecosmomancer/rmcm -- --help
+```
+
+## Help
+
+Run `rmcm --help` for the options supported by the installed command:
+
+```text
+usage: rmcm [-h] -i INPUT [-l {python,c,css}] [--python] [-c] [--css]
+            [-o OUTPUT | -O] [-p]
+
+Remove comments from source files (Python is the default).
+
+options:
+  -h, --help            show this help message and exit
+  -i, --input INPUT     path to input file ('-' for stdin)
+  -l, --language, --lang {python,c,css}
+                        source language (default: python)
+  --python              select Python (the default)
+  -c                    select C-style comments
+  --css                 select CSS comments
+  -o, --output OUTPUT   path to output file
+  -O, --overwrite       overwrite input file
+  -p, --print           print output to stdout
+```
+
+Python is selected by default. Use `--python` or `--lang python` to state it
+explicitly. `-p` retains its existing meaning: print the cleaned source to
+standard output.
 
 ## Commands
 
-```text
-rmcm --help
-```
+`-i PATH` / `--input PATH` is required. Set the source language with one of:
 
-`--help` displays the available options and exits. The complete help output is:
+- `--python` or `--lang python` for Python (the default). Removes Python
+  comments and module, class, and function docstrings.
+- `-c` or `--lang c` for standard C line (`//`) and block (`/* ... */`)
+  comments.
+- `--css` or `--lang css` for CSS block (`/* ... */`) comments.
 
-```text
-usage: rmcm [-h] -i INPUT [-o OUTPUT | -O] [-p]
+The C selector handles standard C lexical strings and character literals; it
+does not claim C++-specific syntax. CSS line comments are not treated as
+comments. In all modes, `-i -` reads source from standard input.
 
-Remove comments and docstrings from Python files.
+Choose where the result goes:
 
-options:
-  -h, --help           show this help message and exit
-  -i INPUT, --input INPUT
-                       path to input file ('-' for stdin)
-  -o OUTPUT, --output OUTPUT
-                       path to output file
-  -O, --overwrite      overwrite input file
-  -p, --print          print output to stdout
-```
-
-`-i` / `--input` is required. Give it a Python file path, or `-` to read from
-standard input. Choose at least one destination:
-
-- `-o PATH` / `--output PATH` writes the cleaned source to `PATH` without
-  changing the input. The output file is written atomically.
+- `-o PATH` / `--output PATH` writes to a separate file atomically.
 - `-O` / `--overwrite` replaces the input file. This cannot be used with
   standard input.
-- `-p` / `--print` writes the cleaned source to standard output. It can be
-  combined with either file destination.
+- `-p` / `--print` prints the result to standard output. It can be combined
+  with either file destination; by itself it is enough to select an output.
 
-`-o` and `-O` are mutually exclusive. `-p` alone is a valid destination.
+`-o` and `-O` are mutually exclusive. File output prints a status message to
+standard output. Errors go to standard error and return a nonzero exit status.
 
 Examples:
 
 ```sh
-# Write a separate output file
-rmcm -i script.py -o script.clean.py
+# Python is the default; write cleaned source separately
+rmcm -i input.py -o output.py
 
-# Replace the input file in place
-rmcm -i script.py -O
+# Select Python explicitly (the -p option below means print)
+rmcm --python -i input.py -p
 
-# Print cleaned source to the terminal
-rmcm -i script.py -p
+# Remove C comments as requested
+rmcm -c -i input.c -o output.c
 
-# Read from a pipe and print the result
-cat script.py | rmcm -i - -p
+# Remove CSS comments in place
+rmcm --css -i styles.css -O
 
-# Save to a file and also print the result
-rmcm --input script.py --output script.clean.py --print
+# Read Python source from a pipe and print the result
+cat input.py | rmcm -i - -p
 ```
-
-Successful file writes print a short status message to standard output. Use
-`-p` when you want the transformed source on standard output. Invalid Python
-or file read/write errors are reported to standard error, and the command
-returns a nonzero exit status.
 
 ## License
 
-MIT. See [LICENSE](LICENSE) if present in the source distribution.
+MIT. See [LICENSE](LICENSE).

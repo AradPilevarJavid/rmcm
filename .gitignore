@@ -1,5 +1,8 @@
 /__pycache__/
 flake.lock
+build/
+dist/
+*.egg-info/
 
 
 TODO.md
