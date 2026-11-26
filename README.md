@@ -1,84 +1,104 @@
-# rmcm - remove (python) comments
+# rmcm
 
-this is a simple script to remove comments and docstrings from python files.
+`rmcm` removes Python comments and docstrings while preserving executable
+code. It uses Python's tokenizer and syntax tree, so comment-like text inside
+strings is kept. Files must contain valid Python syntax. Shebangs and encoding
+cookies are preserved, and empty function/class bodies receive `pass` after
+their docstrings are removed.
 
-I (well mainly claude) made this after I spent too much time removing coments from the code I had to turn in for my classes.
+## Requirements
 
-## Installation
+Python 3.8 or newer. The command has no third-party Python dependencies.
 
-### NixOS
+## Install
 
-#### Add rmcm as a flake input
+### NixOS / Nix
 
-In your system flake's `flake.nix`, add rmcm to `inputs`:
-
-```nix
-inputs = {
-  nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  rmcm.url = "github:thecosmomancer/rmcm";
-  ...
-};
-```
-
-#### Import the module in your NixOS configuration
-
-Pass `rmcm` through to your modules (e.g. via `specialArgs` if using
-flakes directly, or however your setup threads flake inputs to modules),
-then import it alongside your other modules:
+Add the flake as an input:
 
 ```nix
-outputs = { self, nixpkgs, ... }@inputs: {
-  nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
-    system = "x86_64-linux";
-    modules = [
-      ./configuration.nix
-      inputs.rmcm.nixosModules.default
-      # ...your other modules
-    ];
-  };
-};
+inputs.rmcm.url = "github:thecosmomancer/rmcm";
 ```
 
-#### Add the package in your system configuration
+Then add `inputs.rmcm.packages.${system}.default` to
+`environment.systemPackages` (or to `home.packages` in Home Manager). To run
+without installing, use `nix run github:thecosmomancer/rmcm -- --help`.
 
-Add it to your system packages inside ```environment.systemPackages``` or to your user packages using [home-manager](https://github.com/nix-community/home-manager) by adding it inside of ```home.packages```.
+### Other systems
 
-### Other distros
+Clone the repository and install the script on your PATH:
 
-#### Clone the repo
-
-```bash
+```sh
 git clone https://github.com/thecosmomancer/rmcm.git
 cd rmcm
+python3 --version
+chmod +x rmcm.py
+sudo install -m 755 rmcm.py /usr/local/bin/rmcm
 ```
 
-##### Install python3
+Alternatively, run it directly as `python3 rmcm.py ...`. The `setup.sh`
+script performs the same system-wide install and requires `sudo` access to
+`/usr/local/bin`.
 
-##### Run the setup script
+## Commands
 
-```bash
-./setup.sh
+```text
+rmcm --help
 ```
 
-##### If the setup script is not executable
+`--help` displays the available options and exits. The complete help output is:
 
-```bash
-bash setup.sh
+```text
+usage: rmcm [-h] -i INPUT [-o OUTPUT | -O] [-p]
+
+Remove comments and docstrings from Python files.
+
+options:
+  -h, --help           show this help message and exit
+  -i INPUT, --input INPUT
+                       path to input file ('-' for stdin)
+  -o OUTPUT, --output OUTPUT
+                       path to output file
+  -O, --overwrite      overwrite input file
+  -p, --print          print output to stdout
 ```
-## Usage
 
-```bash
-rmcm -i {input_file} -o {output_file}
+`-i` / `--input` is required. Give it a Python file path, or `-` to read from
+standard input. Choose at least one destination:
+
+- `-o PATH` / `--output PATH` writes the cleaned source to `PATH` without
+  changing the input. The output file is written atomically.
+- `-O` / `--overwrite` replaces the input file. This cannot be used with
+  standard input.
+- `-p` / `--print` writes the cleaned source to standard output. It can be
+  combined with either file destination.
+
+`-o` and `-O` are mutually exclusive. `-p` alone is a valid destination.
+
+Examples:
+
+```sh
+# Write a separate output file
+rmcm -i script.py -o script.clean.py
+
+# Replace the input file in place
+rmcm -i script.py -O
+
+# Print cleaned source to the terminal
+rmcm -i script.py -p
+
+# Read from a pipe and print the result
+cat script.py | rmcm -i - -p
+
+# Save to a file and also print the result
+rmcm --input script.py --output script.clean.py --print
 ```
 
-or to overwrite the input file:
-
-```bash
-rmcm -Oi {input_file}
-```
-
-the `-p` argument can be used to print the output to stdout.
+Successful file writes print a short status message to standard output. Use
+`-p` when you want the transformed source on standard output. Invalid Python
+or file read/write errors are reported to standard error, and the command
+returns a nonzero exit status.
 
 ## License
 
-[MIT.](https://choosealicense.com/licenses/mit/) I hate long licensing texts.
+MIT. See [LICENSE](LICENSE) if present in the source distribution.
