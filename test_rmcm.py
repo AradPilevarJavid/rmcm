@@ -78,6 +78,12 @@ def function():
             "def f():\n    pass\n",
         )
 
+    def test_preserves_inline_docstring_suite(self):
+        source = 'def f(): """doc"""; return 1\n'
+        cleaned = remove_comments_and_docstrings(source)
+        compile(cleaned, "<test>", "exec")
+        self.assertEqual(cleaned, "def f(): return 1\n")
+
     def test_preserves_shebang_and_encoding_cookie(self):
         source = (
             "#!/usr/bin/env python3\n"
@@ -118,6 +124,16 @@ class CliTests(unittest.TestCase):
                 code = main(["-i", "-", "-p"])
         self.assertEqual(code, 0)
         self.assertEqual(buf.getvalue(), "x = 1\n")
+
+    def test_help_lists_all_options(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), self.assertRaises(SystemExit) as result:
+            main(["--help"])
+        self.assertEqual(result.exception.code, 0)
+        self.assertIn("--input INPUT", buf.getvalue())
+        self.assertIn("--output OUTPUT", buf.getvalue())
+        self.assertIn("--overwrite", buf.getvalue())
+        self.assertIn("--print", buf.getvalue())
 
 
 if __name__ == "__main__":

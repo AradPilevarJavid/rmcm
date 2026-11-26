@@ -97,6 +97,7 @@ def remove_comments_and_docstrings(source):
     last_col = 0
     line_index = 0
     emitted_pass = set()
+    removed_docstring_end = None
 
     for tok in tokenize.generate_tokens(io_obj.readline):
         token_type, token_string, start, end, line = tok
@@ -110,6 +111,12 @@ def remove_comments_and_docstrings(source):
         needs_pass = span is not None and span[4] and span not in emitted_pass
         emit = span is None or needs_pass
 
+        if token_type == tokenize.OP and token_string == ";" and removed_docstring_end:
+            if removed_docstring_end[0] == start_line and removed_docstring_end[1] <= start_col:
+                # The separator after a removed inline docstring is redundant.
+                emit = False
+            removed_docstring_end = None
+
         if emit and start_col > last_col:
             out_tokens.append(" " * (start_col - last_col))
 
@@ -117,6 +124,8 @@ def remove_comments_and_docstrings(source):
             out_tokens.append("pass")
             emitted_pass.add(span)
         elif span is not None:
+            removed_docstring_end = (end_line, end_col)
+        elif not emit:
             pass
         elif token_type == tokenize.COMMENT:
             if is_protected_comment(tok, source_lines):
@@ -182,7 +191,10 @@ def main(argv=None):
         description="Remove comments and docstrings from Python files.",
     )
     parser.add_argument(
-        "-i", "--input", help="path to input file ('-' for stdin)", required=True
+        "-i",
+        "--input",
+        help="path to input file ('-' for stdin)",
+        required=True,
     )
     action = parser.add_mutually_exclusive_group()
     action.add_argument("-o", "--output", help="path to output file")
