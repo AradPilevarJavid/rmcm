@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rmcm"
 version = "0.2.0"
-description = "Remove comments and docstrings from Python, C, and CSS source files"
+description = "Remove comments and docstrings from Python, C, CSS, and Rust files"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {file = "LICENSE"}

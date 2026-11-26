@@ -1,6 +1,8 @@
 import contextlib
 import io
 import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 import unittest.mock
@@ -117,6 +119,64 @@ class OtherLanguageTests(unittest.TestCase):
         self.assertNotIn("remove", cleaned)
         self.assertIn("color: red", cleaned)
 
+    def test_rust_removes_line_and_nested_block_comments(self):
+        source = (
+            "fn main() { // line comment\n"
+            "    let value = 1; /* outer /* nested */ outer tail */\n"
+            "}\n"
+        )
+        cleaned = clean_source(source, "rust")
+        self.assertNotIn("line comment", cleaned)
+        self.assertNotIn("nested", cleaned)
+        self.assertNotIn("outer tail", cleaned)
+        self.assertEqual(cleaned.count("\n"), source.count("\n"))
+
+    def test_rust_preserves_raw_strings_characters_and_lifetimes(self):
+        source = (
+            'fn borrow<\'a>(value: &\'a str) -> &\'a str {\n'
+            '    let text = r###"// keep /* keep */ "## keep"###; // remove\n'
+            "    let byte_text = br#\"/* byte raw */ // preserved\"#;\n"
+            "    let slash = '/';\n"
+            '    let escaped = "quote: \\\" // still a string";\n'
+            "    value /* strip */\n"
+            "}\n"
+        )
+        cleaned = clean_source(source, "rust")
+        self.assertIn("r###\"// keep /* keep */ \"## keep\"###", cleaned)
+        self.assertIn('br#"/* byte raw */ // preserved"#', cleaned)
+        self.assertIn("let slash = '/';", cleaned)
+        self.assertIn("'a", cleaned)
+        self.assertIn('// still a string', cleaned)
+        self.assertNotIn("remove", cleaned)
+        self.assertNotIn("strip", cleaned)
+
+    def test_rust_cleaned_output_compiles_when_rustc_is_available(self):
+        rustc = shutil.which("rustc")
+        if rustc is None:
+            self.skipTest("rustc is not installed")
+        source = (
+            "pub fn get<'a>(value: &'a str) -> &'a str {\n"
+            '    let raw = r##"/* preserved */ // preserved"##; // remove\n'
+            "    let byte = br#\"// preserved\"#;\n"
+            "    let ch = '/';\n"
+            "    let _ = (raw, byte, ch);\n"
+            "    value /* outer /* nested */ comment */\n"
+            "}\n"
+        )
+        cleaned = clean_source(source, "rust")
+        with tempfile.TemporaryDirectory() as directory:
+            for index, text in enumerate((source, cleaned)):
+                source_path = os.path.join(directory, f"source_{index}.rs")
+                output_path = os.path.join(directory, f"source_{index}.rmeta")
+                with open(source_path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                result = subprocess.run(
+                    [rustc, "--edition=2021", "--crate-type=lib", "--emit=metadata", "-o", output_path, source_path],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
 
 class CliTests(unittest.TestCase):
     def test_print_has_no_extra_blank_line(self):
@@ -154,6 +214,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("--python", buf.getvalue())
         self.assertIn("-c", buf.getvalue())
         self.assertIn("--css", buf.getvalue())
+        self.assertIn("--rust", buf.getvalue())
 
     def test_c_cli_selector_writes_cleaned_source(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -166,6 +227,20 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             with open(output_path, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "int value = 1;          \n")
+
+    def test_rust_cli_selector_writes_cleaned_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = os.path.join(directory, "input.rs")
+            output_path = os.path.join(directory, "output.rs")
+            with open(source_path, "w", encoding="utf-8") as f:
+                f.write('fn main() { let s = r#"/* keep */"#; // remove\n}\n')
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = main(["--rust", "-i", source_path, "-o", output_path])
+            self.assertEqual(code, 0)
+            with open(output_path, encoding="utf-8") as f:
+                cleaned = f.read()
+            self.assertIn('r#"/* keep */"#', cleaned)
+            self.assertNotIn("remove", cleaned)
 
     def test_python_selector_and_implicit_default(self):
         for selector in ([], ["--python"], ["--lang", "python"]):

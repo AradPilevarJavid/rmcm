@@ -225,6 +225,136 @@ def remove_slash_comments(source, line_comments=True):
     return "".join(result)
 
 
+def rust_raw_string_end(source, start):
+    """Return the end of a Rust raw string, or None when no opener is present."""
+    prefix_end = start
+    if source.startswith(("br", "cr"), start):
+        prefix_end += 2
+    elif source.startswith("r", start):
+        prefix_end += 1
+    else:
+        return None
+
+    hash_end = prefix_end
+    while hash_end < len(source) and source[hash_end] == "#":
+        hash_end += 1
+    if hash_end >= len(source) or source[hash_end] != '"':
+        return None
+
+    closing = '"' + "#" * (hash_end - prefix_end)
+    close_start = source.find(closing, hash_end + 1)
+    return None if close_start < 0 else close_start + len(closing)
+
+
+def rust_char_literal_end(source, start):
+    """Return the end of a Rust character literal, excluding Rust lifetimes."""
+    i = start + 1
+    if i >= len(source) or source[i] in "\r\n":
+        return None
+    if source[i] != "\\":
+        return i + 2 if i + 1 < len(source) and source[i + 1] == "'" else None
+
+    i += 1
+    if i >= len(source) or source[i] in "\r\n":
+        return None
+    escape = source[i]
+    if escape == "x":
+        i += 3
+    elif escape == "u" and i + 1 < len(source) and source[i + 1] == "{":
+        close = source.find("}", i + 2)
+        if close < 0:
+            return None
+        i = close + 1
+    else:
+        i += 1
+    return i + 1 if i < len(source) and source[i] == "'" else None
+
+
+def remove_rust_comments(source):
+    """Remove Rust line and nested block comments while preserving literals."""
+    result = []
+    i = 0
+    while i < len(source):
+        char = source[i]
+        raw_end = rust_raw_string_end(source, i)
+        if raw_end is not None:
+            result.append(source[i:raw_end])
+            i = raw_end
+            continue
+
+        if source.startswith(("b\"", "c\""), i):
+            result.append(source[i])
+            result.append('"')
+            i += 2
+            while i < len(source):
+                char = source[i]
+                result.append(char)
+                i += 1
+                if char == "\\" and i < len(source):
+                    result.append(source[i])
+                    i += 1
+                elif char == '"':
+                    break
+            continue
+
+        char_end = rust_char_literal_end(source, i) if source[i] == "'" else None
+        if char_end is not None:
+            result.append(source[i:char_end])
+            i = char_end
+            continue
+
+        if source.startswith("//", i):
+            result.extend((" ", " "))
+            i += 2
+            while i < len(source) and source[i] not in "\r\n":
+                result.append("\t" if source[i] == "\t" else " ")
+                i += 1
+            continue
+
+        if source.startswith("/*", i):
+            result.extend((" ", " "))
+            i += 2
+            depth = 1
+            while i < len(source) and depth:
+                if source.startswith("/*", i):
+                    result.extend((" ", " "))
+                    depth += 1
+                    i += 2
+                elif source.startswith("*/", i):
+                    result.extend((" ", " "))
+                    depth -= 1
+                    i += 2
+                else:
+                    char = source[i]
+                    result.append(char if char in "\r\n" else ("\t" if char == "\t" else " "))
+                    i += 1
+            continue
+
+        if char == '"' or source.startswith(("b'", "c'"), i):
+            if char == '"':
+                quote = '"'
+                result.append(quote)
+                i += 1
+            else:
+                quote = "'"
+                result.extend((char, quote))
+                i += 2
+            while i < len(source):
+                char = source[i]
+                result.append(char)
+                i += 1
+                if char == "\\" and i < len(source):
+                    result.append(source[i])
+                    i += 1
+                elif char == quote:
+                    break
+            continue
+
+        result.append(char)
+        i += 1
+    return "".join(result)
+
+
 def clean_source(source, language):
     if language == "python":
         return remove_comments_and_docstrings(source)
@@ -232,6 +362,8 @@ def clean_source(source, language):
         return remove_slash_comments(source)
     if language == "css":
         return remove_slash_comments(source, line_comments=False)
+    if language == "rust":
+        return remove_rust_comments(source)
     raise ValueError(f"unsupported language: {language}")
 
 
@@ -272,7 +404,7 @@ def main(argv=None):
         "-l",
         "--language",
         "--lang",
-        choices=("python", "c", "css"),
+        choices=("python", "c", "css", "rust"),
         default="python",
         help="source language (default: python)",
     )
@@ -296,6 +428,14 @@ def main(argv=None):
         action="store_const",
         const="css",
         help="select CSS comments",
+    )
+    parser.add_argument(
+        "-r",
+        "--rust",
+        dest="language",
+        action="store_const",
+        const="rust",
+        help="select Rust comments",
     )
     action = parser.add_mutually_exclusive_group()
     action.add_argument("-o", "--output", help="path to output file")

@@ -38,19 +38,20 @@ nix run github:thecosmomancer/rmcm -- --help
 Run `rmcm --help` for the options supported by the installed command:
 
 ```text
-usage: rmcm [-h] -i INPUT [-l {python,c,css}] [--python] [-c] [--css]
-            [-o OUTPUT | -O] [-p]
+usage: rmcm [-h] -i INPUT [-l {python,c,css,rust}] [--python] [-c] [--css]
+            [-r] [-o OUTPUT | -O] [-p]
 
 Remove comments from source files (Python is the default).
 
 options:
   -h, --help            show this help message and exit
   -i, --input INPUT     path to input file ('-' for stdin)
-  -l, --language, --lang {python,c,css}
+  -l, --language, --lang {python,c,css,rust}
                         source language (default: python)
   --python              select Python (the default)
   -c                    select C-style comments
   --css                 select CSS comments
+  -r, --rust            select Rust comments
   -o, --output OUTPUT   path to output file
   -O, --overwrite       overwrite input file
   -p, --print           print output to stdout
@@ -69,6 +70,9 @@ standard output.
 - `-c` or `--lang c` for standard C line (`//`) and block (`/* ... */`)
   comments.
 - `--css` or `--lang css` for CSS block (`/* ... */`) comments.
+- `-r`, `--rust`, or `--lang rust` for Rust `//` comments and nested
+  `/* ... */` comments. Rust raw strings, byte strings, character literals,
+  and lifetimes are preserved.
 
 The C selector handles standard C lexical strings and character literals; it
 does not claim C++-specific syntax. CSS line comments are not treated as
@@ -99,6 +103,9 @@ rmcm -c -i input.c -o output.c
 
 # Remove CSS comments in place
 rmcm --css -i styles.css -O
+
+# Remove Rust comments while preserving Rust literals
+rmcm --rust -i src/main.rs -o /tmp/main.cleaned.rs
 
 # Read Python source from a pipe and print the result
 cat input.py | rmcm -i - -p
