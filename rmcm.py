@@ -11,6 +11,17 @@ import tokenize
 
 CODING_COOKIE = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*[-_.a-zA-Z0-9]+")
 
+LANGUAGE_BY_EXTENSION = {
+    ".py": "python",
+    ".pyw": "python",
+    ".c": "c",
+    ".h": "c",
+    ".css": "css",
+    ".rs": "rust",
+}
+
+SKIP_DIRECTORIES = {"__pycache__", "node_modules"}
+
 STRUCTURAL_TOKENS = {
     tokenize.NEWLINE,
     tokenize.NL,
@@ -389,16 +400,58 @@ def write_atomic(path, text, encoding):
         raise
 
 
+def clean_directory(directory):
+    """Remove comments from every supported file under directory, in place."""
+    cleaned = 0
+    failures = []
+    for root, dirs, files in os.walk(directory):
+        dirs[:] = sorted(
+            name
+            for name in dirs
+            if not name.startswith(".") and name not in SKIP_DIRECTORIES
+        )
+        for name in sorted(files):
+            extension = os.path.splitext(name)[1].lower()
+            language = LANGUAGE_BY_EXTENSION.get(extension)
+            if language is None:
+                continue
+            path = os.path.join(root, name)
+            try:
+                source, encoding = read_source(path)
+                write_atomic(path, clean_source(source, language), encoding)
+            except (
+                SyntaxError,
+                tokenize.TokenError,
+                UnicodeDecodeError,
+                ValueError,
+                OSError,
+            ) as e:
+                failures.append((path, e))
+            else:
+                cleaned += 1
+                print(f"Cleaned {path}")
+    return cleaned, failures
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="rmcm",
         description="Remove comments from source files (Python is the default).",
     )
-    parser.add_argument(
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument(
         "-i",
         "--input",
         help="path to input file ('-' for stdin)",
-        required=True,
+    )
+    target.add_argument(
+        "-a",
+        "--all",
+        metavar="DIRECTORY",
+        nargs="?",
+        const=".",
+        help="recursively remove comments from every supported file under "
+        "DIRECTORY (default: current directory)",
     )
     parser.add_argument(
         "-l",
@@ -446,6 +499,20 @@ def main(argv=None):
         "-p", "--print", action="store_true", help="print output to stdout"
     )
     args = parser.parse_args(argv)
+
+    if args.all is not None:
+        if args.print or args.overwrite or args.output is not None:
+            parser.error("-a/--all cannot be combined with -p, -O or -o")
+        if not os.path.isdir(args.all):
+            parser.error(f"not a directory: {args.all}")
+        cleaned, failures = clean_directory(args.all)
+        for path, error in failures:
+            print(f"rmcm: failed to process {path}: {error}", file=sys.stderr)
+        print(f"Cleaned {cleaned} file(s)")
+        if failures:
+            print(f"Failed on {len(failures)} file(s)", file=sys.stderr)
+            return 1
+        return 0
 
     if not args.print and not args.overwrite and args.output is None:
         parser.error("select an output with -p, -O or -o {filepath}")

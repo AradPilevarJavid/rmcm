@@ -38,14 +38,17 @@ nix run github:thecosmomancer/rmcm -- --help
 Run `rmcm --help` for the options supported by the installed command:
 
 ```text
-usage: rmcm [-h] -i INPUT [-l {python,c,css,rust}] [--python] [-c] [--css]
-            [-r] [-o OUTPUT | -O] [-p]
+usage: rmcm [-h] (-i INPUT | -a [DIRECTORY]) [-l {python,c,css,rust}]
+            [--python] [-c] [--css] [-r] [-o OUTPUT | -O] [-p]
 
 Remove comments from source files (Python is the default).
 
 options:
   -h, --help            show this help message and exit
   -i, --input INPUT     path to input file ('-' for stdin)
+  -a, --all [DIRECTORY]
+                        recursively remove comments from every supported file
+                        under DIRECTORY (default: current directory)
   -l, --language, --lang {python,c,css,rust}
                         source language (default: python)
   --python              select Python (the default)
@@ -63,7 +66,12 @@ standard output.
 
 ## Commands
 
-`-i PATH` / `--input PATH` is required. Set the source language with one of:
+Select a target with either `-i PATH` / `--input PATH` or `-a [DIRECTORY]` /
+`--all [DIRECTORY]`.
+
+### Single files
+
+Set the source language with one of:
 
 - `--python` or `--lang python` for Python (the default). Removes Python
   comments and module, class, and function docstrings.
@@ -78,6 +86,25 @@ The C selector handles standard C lexical strings and character literals; it
 does not claim C++-specific syntax. CSS line comments are not treated as
 comments. In all modes, `-i -` reads source from standard input.
 
+### Whole directories
+
+`-a` / `--all` walks the directory (the current directory when no path is given)
+recursively and cleans every supported file in place. The language is chosen by
+file extension: `.py` and `.pyw` as Python, `.c` and `.h` as C, `.css` as CSS,
+and `.rs` as Rust. Other files are left untouched, as are hidden directories
+and `__pycache__`/`node_modules`. Failed files are reported and left as they
+were; the command exits nonzero if any file failed.
+
+```sh
+# Clean every supported file under the current directory
+rmcm -a
+
+# Clean a project subtree
+rmcm -a src
+```
+
+### Output
+
 Choose where the result goes:
 
 - `-o PATH` / `--output PATH` writes to a separate file atomically.
@@ -86,8 +113,10 @@ Choose where the result goes:
 - `-p` / `--print` prints the result to standard output. It can be combined
   with either file destination; by itself it is enough to select an output.
 
-`-o` and `-O` are mutually exclusive. File output prints a status message to
-standard output. Errors go to standard error and return a nonzero exit status.
+`-o` and `-O` are mutually exclusive. These options apply to `-i` only and are
+rejected with `-a`, which always writes in place. File output prints a status
+message to standard output. Errors go to standard error and return a nonzero
+exit status.
 
 Examples:
 

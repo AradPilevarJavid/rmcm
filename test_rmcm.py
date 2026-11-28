@@ -211,10 +211,93 @@ class CliTests(unittest.TestCase):
         self.assertIn("--output OUTPUT", buf.getvalue())
         self.assertIn("--overwrite", buf.getvalue())
         self.assertIn("--print", buf.getvalue())
+        self.assertIn("--all", buf.getvalue())
         self.assertIn("--python", buf.getvalue())
         self.assertIn("-c", buf.getvalue())
         self.assertIn("--css", buf.getvalue())
         self.assertIn("--rust", buf.getvalue())
+
+    def test_all_recursively_cleans_supported_files_in_place(self):
+        with tempfile.TemporaryDirectory() as directory:
+            nested = os.path.join(directory, "pkg", "nested")
+            hidden = os.path.join(directory, ".hidden")
+            os.makedirs(nested)
+            os.makedirs(hidden)
+            files = {
+                os.path.join(directory, "top.py"): ("# remove\nx = 1\n", "x = 1"),
+                os.path.join(nested, "lib.c"): ("int v; // remove\n", "int v;"),
+                os.path.join(nested, "style.css"): (
+                    "a { /* remove */ color: red; }\n",
+                    "color: red",
+                ),
+                os.path.join(nested, "main.rs"): ("fn main() {} // remove\n", "fn main() {}"),
+            }
+            for path, (text, _) in files.items():
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+            untouched = os.path.join(directory, "notes.txt")
+            with open(untouched, "w", encoding="utf-8") as f:
+                f.write("# keep\n")
+            hidden_file = os.path.join(hidden, "skip.py")
+            with open(hidden_file, "w", encoding="utf-8") as f:
+                f.write("# keep\nx = 1\n")
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = main(["-a", directory])
+            self.assertEqual(code, 0)
+            for path, (_, expected) in files.items():
+                with open(path, encoding="utf-8") as f:
+                    cleaned = f.read()
+                self.assertIn(expected, cleaned)
+                self.assertNotIn("remove", cleaned)
+            with open(untouched, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "# keep\n")
+            with open(hidden_file, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "# keep\nx = 1\n")
+
+    def test_all_defaults_to_current_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "input.py")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("# remove\nx = 1\n")
+            previous = os.getcwd()
+            os.chdir(directory)
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    code = main(["-a"])
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "x = 1\n")
+
+    def test_all_reports_failures_and_keeps_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            good = os.path.join(directory, "good.py")
+            bad = os.path.join(directory, "bad.py")
+            with open(good, "w", encoding="utf-8") as f:
+                f.write("# remove\nx = 1\n")
+            with open(bad, "w", encoding="utf-8") as f:
+                f.write("def (: # broken\n")
+            errors = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+                errors
+            ):
+                code = main(["-a", directory])
+            self.assertEqual(code, 1)
+            self.assertIn("bad.py", errors.getvalue())
+            with open(bad, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "def (: # broken\n")
+            with open(good, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "x = 1\n")
+
+    def test_all_rejects_print_and_output_options(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for extra in (["-p"], ["-O"], ["-o", os.path.join(directory, "out")]):
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(
+                    SystemExit
+                ) as result:
+                    main(["-a", directory] + extra)
+                self.assertEqual(result.exception.code, 2)
 
     def test_c_cli_selector_writes_cleaned_source(self):
         with tempfile.TemporaryDirectory() as directory:
